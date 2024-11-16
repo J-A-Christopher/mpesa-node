@@ -1,20 +1,21 @@
 const express = require("express");
-
 const app = express();
+const bodyParser = require("body-parser");
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 require("dotenv").config();
+app.use(bodyParser.json());
 const cors = require("cors");
 const axios = require("axios");
 
-app.listen(3000, () => {
-  console.log("App is running on port 3000");
+app.listen(4000, () => {
+  console.log("App is running on port 4000");
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(cors());
 
-app.get("/home", (req, res, next) => {
+app.get("/", (req, res, next) => {
   return res.status(200).send({ message: "Hello jesse" });
 });
 
@@ -46,11 +47,15 @@ const generateToken = async (req, res, next) => {
   }
 };
 
+let CheckoutRequestID;
+let timeStamp;
+let password;
+
 app.post("/stk", generateToken, async (req, res, next) => {
   const phone = req.body.phone.substring(1);
   const amount = req.body.amount;
   const date = new Date();
-  const timeStamp =
+  timeStamp =
     date.getFullYear() +
     ("0" + (date.getMonth() + 1)).slice(-2) +
     ("0" + date.getDate()).slice(-2) +
@@ -59,7 +64,7 @@ app.post("/stk", generateToken, async (req, res, next) => {
     ("0" + date.getSeconds()).slice(-2);
   const shortCode = process.env.BUSINESS_SHORT_CODE;
   const passKey = process.env.PASS_KEY;
-  const password = new Buffer.from(shortCode + passKey + timeStamp).toString(
+  password = new Buffer.from(shortCode + passKey + timeStamp).toString(
     "base64"
   );
 
@@ -73,8 +78,8 @@ app.post("/stk", generateToken, async (req, res, next) => {
     return res.status(400).json({ error: "Token not available" });
   }
 
-  await axios
-    .post(
+  try {
+    const response = await axios.post(
       "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
       {
         //MPESA PAYBILL FOR BUSINESS SHORTCODE
@@ -86,8 +91,8 @@ app.post("/stk", generateToken, async (req, res, next) => {
         PartyA: `254${phone}`,
         PartyB: shortCode,
         PhoneNumber: `254${phone}`,
-        CallBackURL: "https://f172-105-161-112-136.ngrok-free.app/callback",
-        //CallBackURL: "https://mydomain.com/pat",
+        CallBackURL:
+          "https://d00d-154-159-237-169.ngrok-free.app/api/callback-route",
         AccountReference: `Mlosafi`,
         TransactionDesc: "Mlosafi",
       },
@@ -96,18 +101,68 @@ app.post("/stk", generateToken, async (req, res, next) => {
           Authorization: `Bearer ${token}`,
         },
       }
-    )
-    .then((data) => {
-      res.status(200).json(data.data);
-    })
-    .catch((err) => {
-      console.log(err.message);
-      res.status(400).json(err.message);
+    );
+    CheckoutRequestID = response.data.CheckoutRequestID;
+    res.status(201).json({
+      message: true,
+      data: response.data,
     });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({
+      message: "failed",
+      error: error.message,
+    });
+  }
 });
 
-app.post("/callback", (req, res) => {
-  console.log("In callback");
-  const callbackData = req.body;
-  console.log("Callback data is", callbackData);
+app.get("/get-specific-tx-detail", generateToken, async (req, res) => {
+  try {
+    if (!CheckoutRequestID) {
+      return res.status(403).json({ error: "CheckoutRequestID not available" });
+    }
+    const shortCode = process.env.BUSINESS_SHORT_CODE;
+    const passKey = process.env.PASS_KEY;
+    const token = req.token;
+    const response = await axios.post(
+      "https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query",
+      {
+        BusinessShortCode: shortCode,
+        Password: password,
+        Timestamp: timeStamp,
+        CheckoutRequestID: CheckoutRequestID,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    // Return the response to the client
+    return res.status(200).json({ data: response.data });
+  } catch (error) {
+    console.error("Error processing callback:", error);
+    return res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+app.post("/api/callback-route", (req, res) => {
+  try {
+    const callbackData = req.body;
+    console.log("Received Callback Data:", callbackData);
+
+    if (callbackData.Body && callbackData.Body.stkCallback) {
+      const { stkCallback } = callbackData.Body;
+      console.log("STK Callback Details:", stkCallback);
+    }
+
+    res.json({
+      status: "success",
+      callbackData,
+    });
+  } catch (err) {
+    console.error("Error processing callback:", err);
+  }
 });
